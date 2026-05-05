@@ -153,6 +153,17 @@ def process_notification(message_id: str):
             log.info("[PROCESSING] Not from target — skipping.")
             return
 
+        # Skip messages sent by the tracker account itself to prevent loop
+        sender_email = message.get("from", {}).get("email", "").lower()
+        try:
+            token = get_token()
+            my_email = get_my_email(token).lower()
+            if sender_email == my_email:
+                log.info(f"[PROCESSING] Message sent by tracker account itself — skipping to prevent loop.")
+                return
+        except Exception:
+            pass
+
         thread_id = message["thread_id"]
         if thread_filter and thread_id != thread_filter:
             log.info("[PROCESSING] Thread does not match filter — skipping.")

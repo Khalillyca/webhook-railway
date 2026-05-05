@@ -153,17 +153,6 @@ def process_notification(message_id: str):
             log.info("[PROCESSING] Not from target — skipping.")
             return
 
-        # Skip messages sent by the tracker account itself to prevent loop
-        sender_email = message.get("from", {}).get("email", "").lower()
-        try:
-            token = get_token()
-            my_email = get_my_email(token).lower()
-            if sender_email == my_email:
-                log.info(f"[PROCESSING] Message sent by tracker account itself — skipping to prevent loop.")
-                return
-        except Exception:
-            pass
-
         thread_id = message["thread_id"]
         if thread_filter and thread_id != thread_filter:
             log.info("[PROCESSING] Thread does not match filter — skipping.")
@@ -227,6 +216,17 @@ def process_notification(message_id: str):
 
         if status in ("Resolved", "Forwarded"):
             send_trigger_mail(thread, event_type=status.upper(), ai_result=ai_result)
+            # Increment count by 1 to account for the trigger reply we just sent
+            upsert_thread_state(
+                thread_id=thread_id,
+                msg_count=new_msg_count + 1,
+                subject=subject,
+                last_status=status,
+                last_summary=ai_result.get("summary", ""),
+                last_department=ai_result.get("department", ""),
+                last_priority=ai_result.get("priority", "Medium"),
+                last_activity=last_activity,
+            )
             set_thread_triggered(thread_id)
             log.info(f"[DONE] Status={status} trigger mail sent for: {subject}")
             return
@@ -235,6 +235,17 @@ def process_notification(message_id: str):
         if new_msg_count > old_count:
             event_type = "NEW_REPLY" if old_count > 0 else "NEW_THREAD"
             send_trigger_mail(thread, event_type=event_type, ai_result=ai_result)
+            # Increment count by 1 to account for the trigger reply we just sent
+            upsert_thread_state(
+                thread_id=thread_id,
+                msg_count=new_msg_count + 1,
+                subject=subject,
+                last_status=status,
+                last_summary=ai_result.get("summary", ""),
+                last_department=ai_result.get("department", ""),
+                last_priority=ai_result.get("priority", "Medium"),
+                last_activity=last_activity,
+            )
             set_thread_triggered(thread_id)
             log.info(f"[DONE] {event_type} trigger mail sent for: {subject}")
 

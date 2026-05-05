@@ -142,6 +142,16 @@ def fetch_thread(conversation_id: str) -> dict:
             headers=_headers(),
             params=params if page == 1 else None,
         )
+
+        # Personal Outlook accounts don't support conversationId $filter
+        # Fall back to search if we get a 400
+        if r.status_code == 400:
+            log.warning(
+                f"[GRAPH] conversationId filter not supported — "
+                f"falling back to inbox search for thread {conversation_id[:30]}"
+            )
+            return _fetch_thread_fallback(conversation_id)
+
         r.raise_for_status()
         data = r.json()
 
@@ -214,6 +224,99 @@ def fetch_thread(conversation_id: str) -> dict:
         ],
 
         # Full reply chain
+        "reply_chain":        parsed,
+        "full_thread_text":   full_thread_text,
+    }
+
+
+# ------------------------------------------------------------------ #
+#  FALLBACK: fetch thread via inbox search (personal Outlook)         #
+# ------------------------------------------------------------------ #
+
+def _fetch_thread_fallback(conversation_id: str) -> dict:
+    """
+    Fallback for personal Outlook accounts where conversationId $filter
+    returns 400. Searches inbox for messages with matching conversationId
+    using $search or iterates recent messages.
+    """
+    log.info(f"[GRAPH] Fallback: searching inbox for conversationId {conversation_id[:30]}...")
+
+    all_messages = []
+    url = f"{GRAPH}/me/mailFolders/inbox/messages"
+    params = {
+        "$select": (
+            "id,conversationId,subject,"
+            "from,toRecipients,ccRecipients,"
+            "receivedDateTime,bodyPreview,body"
+        ),
+        "$orderby": "receivedDateTime desc",
+        "$top": 50,
+    }
+
+    r = requests.get(url, headers=_headers(), params=params)
+    if r.status_code != 200:
+        log.error(f"[GRAPH] Fallback inbox fetch failed: {r.status_code}")
+        return {}
+
+    data = r.json()
+    for msg in data.get("value", []):
+        if msg.get("conversationId") == conversation_id:
+            all_messages.append(msg)
+
+    # Also check sent items
+    sent_url = f"{GRAPH}/me/mailFolders/sentitems/messages"
+    r2 = requests.get(sent_url, headers=_headers(), params=params)
+    if r2.status_code == 200:
+        for msg in r2.json().get("value", []):
+            if msg.get("conversationId") == conversation_id:
+                all_messages.append(msg)
+
+    if not all_messages:
+        log.warning(f"[GRAPH] Fallback: no messages found for {conversation_id[:30]}")
+        return {}
+
+    # Sort by received time
+    all_messages.sort(key=lambda m: m.get("receivedDateTime", ""))
+
+    parsed = [_extract_message(m) for m in all_messages]
+
+    all_participants = {}
+    for msg in parsed:
+        for addr in [msg["from"]] + msg["to"] + msg["cc"]:
+            if addr["email"]:
+                all_participants[addr["email"]] = addr["name"]
+
+    first = parsed[0]
+    last  = parsed[-1]
+
+    chain_text_parts = []
+    for i, msg in enumerate(parsed):
+        chain_text_parts.append(
+            f"--- Message {i+1} | From: {msg['from']['name']} <{msg['from']['email']}> "
+            f"| {msg['received_at']} ---\n"
+            f"Subject: {msg['subject']}\n"
+            f"{msg['body_preview']}"
+        )
+    full_thread_text = "\n\n".join(chain_text_parts)
+
+    log.info(f"[GRAPH] Fallback thread fetched: {first['subject'][:60]} | {len(parsed)} messages")
+
+    return {
+        "thread_id":          conversation_id,
+        "subject":            first["subject"],
+        "from":               first["from"],
+        "msg_count":          len(parsed),
+        "has_reply":          len(parsed) > 1,
+        "last_replier":       last["from"],
+        "last_reply_preview": last["body_preview"],
+        "last_activity_at":   last["received_at"],
+        "created_at":         first["received_at"],
+        "first_message_id":   first["message_id"],
+        "latest_message_id":  last["message_id"],
+        "all_participants":   [
+            {"name": name, "email": email}
+            for email, name in all_participants.items()
+        ],
         "reply_chain":        parsed,
         "full_thread_text":   full_thread_text,
     }

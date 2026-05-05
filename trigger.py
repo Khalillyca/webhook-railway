@@ -39,7 +39,8 @@ def send_trigger_mail(
         event_type: "NEW_REPLY" or "OVERDUE"
         ai_result:  Optional AI classification dict with summary, department, priority, status, reason
     """
-    message_id = thread.get("latest_message_id")
+    # Use first message ID for reply to ensure we stay in the original thread
+    message_id = thread.get("first_message_id") or thread.get("latest_message_id")
     if not message_id:
         log.error("[TRIGGER] No message_id in thread — cannot send trigger mail.")
         return
@@ -47,32 +48,43 @@ def send_trigger_mail(
     html = _build_html(thread, event_type, ai_result)
 
     try:
-        # Step 1: Create reply-all draft (stays in same conversationId)
+        # Step 1: Create reply-all draft WITH body in one call
         log.info(f"[TRIGGER] Creating reply-all draft for: {thread.get('subject', '')[:60]}...")
         r = requests.post(
             f"{GRAPH}/me/messages/{message_id}/createReplyAll",
             headers=_headers(),
-            json={},
+            json={
+                "message": {
+                    "body": {
+                        "contentType": "HTML",
+                        "content": html,
+                    }
+                }
+            },
         )
+
+        # If first message fails, try latest
+        if r.status_code != 200:
+            latest_id = thread.get("latest_message_id")
+            if latest_id and latest_id != message_id:
+                r = requests.post(
+                    f"{GRAPH}/me/messages/{latest_id}/createReplyAll",
+                    headers=_headers(),
+                    json={
+                        "message": {
+                            "body": {
+                                "contentType": "HTML",
+                                "content": html,
+                            }
+                        }
+                    },
+                )
+
         r.raise_for_status()
         draft_id = r.json()["id"]
         log.info(f"[TRIGGER] Created reply-all draft: {draft_id[:40]}...")
 
-        # Step 2: Set the body of the draft
-        r = requests.patch(
-            f"{GRAPH}/me/messages/{draft_id}",
-            headers=_headers(),
-            json={
-                "body": {
-                    "contentType": "HTML",
-                    "content": html,
-                }
-            },
-        )
-        r.raise_for_status()
-        log.info("[TRIGGER] Patched draft body.")
-
-        # Step 3: Send it
+        # Step 2: Send the draft directly (no patch needed)
         r = requests.post(
             f"{GRAPH}/me/messages/{draft_id}/send",
             headers=_headers(),

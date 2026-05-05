@@ -328,14 +328,14 @@ def _fetch_thread_fallback(conversation_id: str) -> dict:
 
 def is_from_target(message: dict, target_emails: list) -> bool:
     """
-    Check if a message is from or to any of the target emails/domains.
+    Check if a message involves any of the target emails/domains.
+    Checks sender AND all recipients so replies are not skipped.
     Targets can be full emails or just domains.
     """
-    # Collect all addresses in the message
     all_addresses = (
         [message["from"]["email"]]
-        + [a["email"] for a in message["to"]]
-        + [a["email"] for a in message["cc"]]
+        + [a["email"] for a in message.get("to", [])]
+        + [a["email"] for a in message.get("cc", [])]
     )
 
     for addr in all_addresses:
@@ -346,7 +346,6 @@ def is_from_target(message: dict, target_emails: list) -> bool:
                 if addr == target:
                     return True
             else:
-                # Domain match
                 if addr.endswith(f"@{target}"):
                     return True
     return False

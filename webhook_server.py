@@ -169,17 +169,9 @@ def process_notification(message_id: str):
         existing  = get_thread_state(thread_id)
         old_count = existing["msg_count"] if existing else 0
 
-        if new_msg_count <= old_count:
-            upsert_thread_state(
-                thread_id=thread_id,
-                msg_count=new_msg_count,
-                subject=subject,
-                last_status=existing["last_status"] if existing else "Open",
-                last_activity=last_activity,
-            )
-            return
-
-        log.info(f"[AI] Classifying: {subject[:60]}...")
+        # Always classify — even if count is same (updated notification)
+        # This ensures status changes on replies are captured
+        log.info(f"[AI] Classifying: {subject[:60]}... (msgs: {old_count} → {new_msg_count})")
         ai_result = classify_thread(thread.get("full_thread_text", ""), subject)
         status    = ai_result.get("status", "Open")
 
@@ -220,11 +212,17 @@ def process_notification(message_id: str):
             log.error(f"[API] Failed to push data: {api_err}")
 
         if status in ("Resolved", "Forwarded"):
+            send_trigger_mail(thread, event_type=status.upper(), ai_result=ai_result)
+            set_thread_triggered(thread_id)
+            log.info(f"[DONE] Status={status} trigger mail sent for: {subject}")
             return
 
-        send_trigger_mail(thread, event_type="NEW_REPLY", ai_result=ai_result)
-        set_thread_triggered(thread_id)
-        log.info(f"[DONE] Trigger mail sent for: {subject}")
+        # Send trigger on every new message in thread
+        if new_msg_count > old_count:
+            event_type = "NEW_REPLY" if old_count > 0 else "NEW_THREAD"
+            send_trigger_mail(thread, event_type=event_type, ai_result=ai_result)
+            set_thread_triggered(thread_id)
+            log.info(f"[DONE] {event_type} trigger mail sent for: {subject}")
 
     except Exception as e:
         log.error(f"[ERROR] {e}", exc_info=True)

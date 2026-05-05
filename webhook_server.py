@@ -48,6 +48,27 @@ CLIENT_STATE_SECRET = os.getenv("CLIENT_STATE_SECRET", "my-outlook-tracker-secre
 RAILWAY_API_URL = os.getenv("RAILWAY_API_URL", "https://web-production-5af2f.up.railway.app/api/email-tracker/")
 
 # ------------------------------------------------------------------ #
+#  Initialize DB and config at import time (required for gunicorn)     #
+# ------------------------------------------------------------------ #
+
+init_db()
+
+def load_config_from_env():
+    targets = os.getenv("TARGETS", "")
+    if targets:
+        set_config("targets", targets)
+    overdue_hours = os.getenv("OVERDUE_HOURS", "6")
+    set_config("overdue_hours", overdue_hours)
+    thread_filter = os.getenv("THREAD_FILTER", "")
+    if thread_filter:
+        set_config("thread_filter", thread_filter)
+    scan_date = os.getenv("SCAN_DATE", "")
+    if scan_date:
+        set_config("scan_date", scan_date)
+
+load_config_from_env()
+
+# ------------------------------------------------------------------ #
 #  Logging                                                             #
 # ------------------------------------------------------------------ #
 
@@ -292,57 +313,7 @@ def health():
 #  Startup                                                             #
 # ------------------------------------------------------------------ #
 
-def load_config_from_env():
-    """Load configuration from environment variables."""
-    targets = os.getenv("TARGETS", "")
-    if targets:
-        set_config("targets", targets)
-        log.info(f"[CONFIG] Targets: {targets}")
-    else:
-        log.info("[CONFIG] No targets set — tracking ALL emails.")
-
-    thread_filter = os.getenv("THREAD_FILTER", "")
-    if thread_filter:
-        set_config("thread_filter", thread_filter)
-
-    overdue_hours = os.getenv("OVERDUE_HOURS", "6")
-    set_config("overdue_hours", overdue_hours)
-    log.info(f"[CONFIG] Overdue threshold: {overdue_hours}h")
-
-    scan_date = os.getenv("SCAN_DATE", "")
-    if scan_date:
-        set_config("scan_date", scan_date)
-        log.info(f"[CONFIG] Scan date: {scan_date}")
-
-
 if __name__ == "__main__":
-    init_db()
-
-    log.info("=" * 60)
-    log.info("  OUTLOOK WEBHOOK SERVER STARTING ON RAILWAY")
-    log.info("=" * 60)
-
-    try:
-        token    = get_token()
-        my_email = get_my_email(token)
-        log.info(f"Authenticated as: {my_email}")
-    except Exception as e:
-        log.error(f"Auth failed: {e}")
-        exit(1)
-
-    load_config_from_env()
-
-    scan_date = get_config_scan_date()
-    if scan_date:
-        log.info("[STARTUP] Running bootstrap scan...")
-        try:
-            run_bootstrap()
-        except Exception as e:
-            log.error(f"[STARTUP] Bootstrap failed: {e}", exc_info=True)
-
-    overdue_thread = threading.Thread(target=overdue_check_loop, daemon=True)
-    overdue_thread.start()
-
     port = int(os.getenv("PORT", 5000))
     log.info(f"[STARTUP] Server running on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)

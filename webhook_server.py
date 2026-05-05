@@ -169,8 +169,11 @@ def process_notification(message_id: str):
         existing  = get_thread_state(thread_id)
         old_count = existing["msg_count"] if existing else 0
 
-        # Always classify — even if count is same (updated notification)
-        # This ensures status changes on replies are captured
+        # Only process if message count actually increased
+        if new_msg_count <= old_count:
+            log.info(f"[PROCESSING] No new messages (count={new_msg_count}) — skipping.")
+            return
+
         log.info(f"[AI] Classifying: {subject[:60]}... (msgs: {old_count} → {new_msg_count})")
         ai_result = classify_thread(thread.get("full_thread_text", ""), subject)
         status    = ai_result.get("status", "Open")

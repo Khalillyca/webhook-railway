@@ -1,11 +1,5 @@
 """
 ai_classifier.py — AI classification using OpenAI gpt-4o
-
-Analyzes full thread text and returns structured classification:
-  summary, department, priority, status, reason
-
-Includes forwarded/escalated detection.
-Robust fallback to status='Open' on any failure.
 """
 
 import os
@@ -33,8 +27,15 @@ YOUR CLASSIFICATIONS:
 status: What is the current state of this thread?
 - "Pending Reply" → The ball is in someone's court and they haven't responded yet
 - "Open" → Active conversation, things are moving, no one is stuck waiting
-- "Resolved" → The matter is closed — confirmed, completed, thanked, or acknowledged as done
+- "Resolved" → The matter is fully closed — confirmed, completed, thanked, or acknowledged as done
 - "Forwarded" → Responsibility has been handed to someone else — delegated, escalated, reassigned, looped in
+- "Delayed" → Someone has committed to completing the task at a future date/time but it is NOT done yet. Examples: "I will do it tomorrow", "Will complete by Friday", "Will send it by EOD", "Will update you next week"
+
+IMPORTANT DISTINCTIONS:
+- "Resolved" means the work is ALREADY DONE and confirmed
+- "Delayed" means the work is PROMISED for the future but not done yet
+- "Pending Reply" means someone asked something and is still waiting for any response
+- If someone says "I will get back to you tomorrow" or "will be done by Friday" — that is DELAYED, not Resolved
 
 priority: How urgent is this, really?
 - "Critical" → Legal, financial, security, or executive risk. Needs immediate attention.
@@ -56,13 +57,12 @@ Return ONLY this JSON, nothing else:
   "summary": "...",
   "department": "...",
   "priority": "Low|Medium|High|Critical",
-  "status": "Pending Reply|Open|Resolved|Forwarded",
+  "status": "Pending Reply|Open|Resolved|Forwarded|Delayed",
   "reason": "..."
 }"""
 
 
 def _get_client():
-    """Create OpenAI client lazily so missing key doesn't crash at import time."""
     from openai import OpenAI
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
@@ -145,7 +145,7 @@ def _parse_response(raw_text: str) -> Optional[dict]:
 
 
 def _validate_result(result: dict):
-    valid_statuses = {"Pending Reply", "Open", "Resolved", "Forwarded"}
+    valid_statuses = {"Pending Reply", "Open", "Resolved", "Forwarded", "Delayed"}
     valid_priorities = {"Low", "Medium", "High", "Critical"}
 
     if "summary" not in result or not result["summary"]:

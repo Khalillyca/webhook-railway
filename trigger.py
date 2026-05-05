@@ -48,49 +48,54 @@ def send_trigger_mail(
     html = _build_html(thread, event_type, ai_result)
 
     try:
-        # Step 1: Create reply-all draft WITH body in one call
+        # Step 1: Create reply-all draft
         log.info(f"[TRIGGER] Creating reply-all draft for: {thread.get('subject', '')[:60]}...")
         r = requests.post(
             f"{GRAPH}/me/messages/{message_id}/createReplyAll",
             headers=_headers(),
-            json={
-                "message": {
-                    "body": {
-                        "contentType": "HTML",
-                        "content": html,
-                    }
-                }
-            },
+            json={},
         )
 
         # If first message fails, try latest
         if r.status_code != 200:
             latest_id = thread.get("latest_message_id")
             if latest_id and latest_id != message_id:
+                log.warning(f"[TRIGGER] First message failed ({r.status_code}), trying latest...")
                 r = requests.post(
                     f"{GRAPH}/me/messages/{latest_id}/createReplyAll",
                     headers=_headers(),
-                    json={
-                        "message": {
-                            "body": {
-                                "contentType": "HTML",
-                                "content": html,
-                            }
-                        }
-                    },
+                    json={},
                 )
 
         r.raise_for_status()
         draft_id = r.json()["id"]
         log.info(f"[TRIGGER] Created reply-all draft: {draft_id[:40]}...")
 
-        # Step 2: Send the draft directly (no patch needed)
+        # Step 2: Patch the draft body with our HTML
+        r = requests.patch(
+            f"{GRAPH}/me/messages/{draft_id}",
+            headers=_headers(),
+            json={
+                "body": {
+                    "contentType": "HTML",
+                    "content": html,
+                }
+            },
+        )
+        if r.status_code != 200:
+            log.error(f"[TRIGGER] Failed to patch draft body: {r.status_code} — {r.text}")
+            r.raise_for_status()
+        log.info("[TRIGGER] Patched draft body successfully.")
+
+        # Step 3: Send the draft
         r = requests.post(
             f"{GRAPH}/me/messages/{draft_id}/send",
             headers=_headers(),
             json={},
         )
-        r.raise_for_status()
+        if r.status_code not in (200, 202):
+            log.error(f"[TRIGGER] Failed to send draft: {r.status_code} — {r.text}")
+            r.raise_for_status()
         log.info(
             f"[TRIGGER] {event_type} mail sent for thread: "
             f"{thread.get('subject', '')[:60]}"
